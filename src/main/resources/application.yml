@@ -1,0 +1,183 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: harshboss-api
+
+  # ─── Datasource (PostgreSQL) ────────────────────────────────────────────────
+  datasource:
+    url: jdbc:postgresql://localhost:5432/atlas_db
+    username: atlas
+    password: atlas
+    driver-class-name: org.postgresql.Driver
+
+  # ─── JPA / Hibernate ────────────────────────────────────────────────────────
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  # ─── Flyway ─────────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # ─── Jackson ────────────────────────────────────────────────────────────────
+  jackson:
+    default-property-inclusion: non_null
+
+  # ─── Spring AI (Google Gemini) ──────────────────────────────────────────────
+  ai:
+    google:
+      genai:
+        api-key: ${GEMINI_API_KEY:dummy}
+        chat:
+          options:
+            model: ${GEMINI_MODEL:gemini-2.5-flash}
+            temperature: 0.3
+        embedding:
+          enabled: true
+          options:
+            model: text-embedding-004
+
+    # PGVector store — stores email embeddings for semantic search
+    # Gemini text-embedding-004 = 768 dimensions (NOT 1536 like OpenAI)
+    vectorstore:
+      pgvector:
+        index-type: hnsw
+        distance-type: cosine_distance
+        dimensions: 768
+        schema-name: public
+        table-name: email_embeddings
+        initialize-schema: true
+
+    # ─── MCP client config ────────────────────────────────────────────────────
+    # harshboss-api is now an MCP CLIENT. The MCP server (atlas-mcp-server) runs
+    # separately on port 8081. Spring AI 2.0.0 auto-configures the MCP client
+    # + ToolCallbackProvider beans from these properties.
+    #
+    # IMPORTANT: If the MCP server isn't running, the app will still start
+    # (the McpClientFailSafeConfig provides an empty ToolCallbackProvider fallback).
+    # But agent tool calls will fail until the MCP server is up.
+    mcp:
+      client:
+        enabled: ${MCP_CLIENT_ENABLED:true}
+        # SSE-based MCP client connecting to the standalone atlas-mcp-server
+        sse:
+          connections:
+            atlas-mcp-server:
+              url: ${ATLAS_MCP_SERVER_URL:http://localhost:8081}
+
+# ─── CORS ────────────────────────────────────────────────────────────────────
+harshboss:
+  cors:
+    allowed-origins: http://localhost:4200
+
+  # ─── Angular UI URL (for OAuth2 redirect after connecting email) ───────────
+  # After the OAuth2 callback succeeds, the backend redirects the browser to
+  # this URL + /profile so the user lands on the Angular UI (not the backend).
+  ui:
+    url: ${ATLAS_UI_URL:http://localhost:4200}
+
+  # ─── MCP client fail-safe mode ──────────────────────────────────────────────
+  # When true (default): the app starts even if the MCP server (port 8081) is
+  # not running. Agent tool calls won't work, but the REST API + UI do.
+  # When false: the MCP client connects on startup (MCP server MUST be running).
+  mcp:
+    client:
+      fail-safe: ${MCP_CLIENT_FAIL_SAFE:true}
+
+  sync:
+    fixed-rate-ms: ${SYNC_FIXED_RATE_MS:1800000}
+    initial-delay-ms: ${SYNC_INITIAL_DELAY_MS:60000}
+    email-max-results: ${SYNC_EMAIL_MAX_RESULTS:25}
+    calendar-max-results: ${SYNC_CALENDAR_MAX_RESULTS:50}
+
+  # ─── AI Guardrails (OWASP LLM Top 10 + safety) ─────────────────────────────
+  # All guardrails are toggleable. Set to false to disable individually.
+  guardrails:
+    content-moderation:
+      enabled: true              # Block hate, violence, self-harm, sexual content
+      threshold: 0.7            # Block if harm score >= this (0.0-1.0)
+    output-sanitizer:
+      enabled: true              # Strip API keys, passwords, tokens from AI output
+    topic-restriction:
+      enabled: true              # Keep agent on work/productivity topics
+      allowed-topics: email,calendar,meetings,tasks,jobs,career,productivity,work,schedule
+    tool-guard:
+      enabled: true              # Validate + log all @Tool calls
+      max-tool-calls-per-request: 10  # Prevent infinite tool loops
+    hallucination-check:
+      enabled: true              # Verify AI claims are grounded in tool results
+    input-length-limit:
+      enabled: true
+      max-chars: 10000           # Reject inputs longer than this
+
+  # ─── Job Aggregation APIs (for skill-matched job search) ───────────────────
+  # Get keys:
+  #   SerpAPI:    https://serpapi.com/manage-api-key (100 free searches/mo)
+  #   Google CSE: https://console.cloud.google.com (create a Custom Search Engine)
+  #   RapidAPI:   https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
+  job-aggregation:
+    serpapi:
+      api-key: ${SERPAPI_API_KEY:}
+    google-cse:
+      api-key: ${GOOGLE_CSE_API_KEY:}
+      search-engine-id: ${GOOGLE_CSE_ID:}
+    rapidapi:
+      key: ${RAPIDAPI_KEY:}
+      host: jsearch.p.rapidapi.com
+
+  # ─── Jev AI (TypeSafe AI — System One decision model) ──────────────────────
+  # Jev is a fast (~100ms) typed decision model used as a gatekeeper/router.
+  # It sits BEFORE Gemini for classification, safety checks, and intent routing.
+  # Get your key: https://typesafe.ai
+  jev:
+    base-url: ${JEV_BASE_URL:https://api.typesafe.ai}
+    api-key: ${JEV_API_KEY:}
+    enabled: ${JEV_ENABLED:true}  # Set false to fall back to LLM-only mode
+
+  # ─── AI Voice Interviewer ──────────────────────────────────────────────────
+  interview:
+    tts:
+      api-key: ${OPENAI_API_KEY:dummy}     # Used for OpenAI TTS (interviewer voice)
+      voice: onyx                           # alloy, echo, fable, onyx, nova, shimmer
+    deepgram:
+      api-key: ${DEEPGRAM_API_KEY:}         # Used for real-time STT (candidate voice)
+    max-questions: 10                       # Auto-complete after this many questions
+
+  # ─── OAuth2 providers ───────────────────────────────────────────────────────
+  oauth:
+    google:
+      client-id: ${GOOGLE_CLIENT_ID:dummy}
+      client-secret: ${GOOGLE_CLIENT_SECRET:dummy}
+      redirect-uri: ${GOOGLE_REDIRECT_URI:http://localhost:8080/api/oauth/callback/google}
+      scopes: https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly
+      authorize-url: https://accounts.google.com/o/oauth2/v2/auth
+      token-url: https://oauth2.googleapis.com/token
+      gmail-base: https://gmail.googleapis.com/gmail/v1
+      calendar-base: https://www.googleapis.com/calendar/v3
+
+# ─── Actuator ────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      show-details: when_authorized
+
+# ─── Logging ─────────────────────────────────────────────────────────────────
+logging:
+  level:
+    com.harshboss: DEBUG
+    org.springframework.ai: INFO
+    org.hibernate.SQL: WARN
+    org.flywaydb: INFO
